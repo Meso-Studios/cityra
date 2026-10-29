@@ -4,7 +4,7 @@ A 2D real-time strategy game for the browser, written in plain HTML5, CSS and Ja
 
 ## Play it
 
-**Online:** https://marinpalazzolo5-code.github.io/cityra/ (GitHub Pages). Multiplayer works there with join codes.
+**Online:** https://meso-studios.github.io/cityra/ (GitHub Pages). Multiplayer works there with join codes.
 
 ## Run it
 
