@@ -1061,7 +1061,7 @@ const Menu = {
     const add = $('f-add'); if (add) add.onclick = () => { read(); const used = [o.player, ...o.ais.map((a) => a.key)]; o.ais.push({ key: FACTION_KEYS.find((k) => !used.includes(k)) || FACTION_KEYS[1], diff: 'normal' }); if (o.mode === 'europe') Era.prepEurope(o); this.form(); this.preview(); };
     $('f-era').onchange = () => { read(); o.era = $('f-era').value; Era.apply(o.era); this.fixKeys(); if (o.era !== 'napoleonic' && o.mode === 'europe') { o.mode = 'skirmish'; o.type = 'continental'; } else if (o.era === 'napoleonic' && !ERA_MODES.napoleonic.includes(o.mode)) o.mode = 'skirmish'; if (o.mode === 'europe') Era.prepEurope(o); this.show(); };
     $('m-form').querySelectorAll('[data-rm]').forEach((b) => (b.onclick = () => { read(); o.ais.splice(+b.dataset.rm, 1); this.form(); this.preview(); }));
-    $('m-start').onclick = () => { read(); this.campaignIdx = null; Store.set('lastSetup', { ...o, seed: undefined }); this.launch({ ...o }); };
+    $('m-start').onclick = () => { read(); this.campaignIdx = null; if (typeof Net !== 'undefined' && Net.host && Net.active) return Net.startGame(); Store.set('lastSetup', { ...o, seed: undefined }); this.launch({ ...o }); };
     this.read = read;
     $('f-type').onchange = () => { const was = o.type; read(); if (o.type === 'earth' && was !== 'earth') { o.season = Earth.defaultSeason(Earth.climate(o.geo.lat, o.geo.lon)); } o.playerStart = null; this.form(); };
     $('f-season').onchange = () => { read(); o.seasonSet = true; this.preview(); };

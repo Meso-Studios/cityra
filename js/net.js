@@ -122,7 +122,7 @@ const Net = {
       <div class="row">${this.active ? `<button class="cmd warn" id="mp-leave">Leave</button>` : `<button class="cmd hi" id="mp-host">Host a game</button><button class="cmd" id="mp-join">Join</button>`}</div>
       <p class="sub small" id="mp-st"><b>${U.esc(st)}</b>${this.status ? ' · ' + U.esc(this.status) : ''}</p>
       ${this.host ? `<h4>Players</h4><table class="mpt"><tr><td>${U.esc(this.name)} (host)</td><td>${U.esc(FACTIONS[o.player].name)}</td></tr>${peers.map((p) => `<tr><td>${U.esc(p.name)}</td><td><select data-peer="${p.id}">${slots.map((k, i) => i === 0 ? '' : `<option value="${i}" ${p.slot === i ? 'selected' : ''}>${U.esc(FACTIONS[k].name)}</option>`).join('')}<option value="-1" ${p.slot === -1 ? 'selected' : ''}>Spectate</option></select></td></tr>`).join('')}</table>
-        <p class="sub small">Each player takes one opponent slot from the setup screen (add opponents there for more seats). Unclaimed slots stay AI. Close this window to change the map, era or mode; the room stays open.</p>
+        <p class="sub small">Each player takes one opponent slot from the setup screen (add opponents there for more seats). Unclaimed slots stay AI. Close this window to change the map, era or mode; the room stays open, and Deploy then starts the battle for everyone.</p>
         <div class="row"><button class="cmd hi" id="mp-start" ${peers.length ? '' : 'disabled'}>Start multiplayer battle</button></div>` : ''}
       ${this.client && this.lobby ? `<h4>Lobby</h4><p class="sub">${U.esc(this.lobby.mode)} · ${U.esc(this.lobby.era)}</p><table class="mpt">${this.lobby.players.map((p) => `<tr><td>${U.esc(p.name)}</td><td>${U.esc(p.faction)}</td></tr>`).join('')}</table><p class="sub small">Waiting for the host to start…</p>` : ''}
       ${this.active ? `<div class="chatlog">${this.chat.slice(-8).map((c) => `<div><b>${U.esc(c.n)}:</b> ${U.esc(c.m)}</div>`).join('')}</div><div class="row"><input id="mp-chat" placeholder="Message" maxlength="140"><button class="cmd" id="mp-say">Send</button></div>` : ''}`;
@@ -139,7 +139,7 @@ const Net = {
   },
   open(asHost) {
     this.leave(true);
-    this.host = asHost; this.client = !asHost; this.active = true; this.peers = {}; this.status = 'Connecting…'; this.chat = [];
+    this.host = asHost; this.client = !asHost; this.active = true; this.peers = {}; this.status = 'Connecting…'; this.chat = []; this.resetHost();
     Game.backgroundClock(true);
     const on = (from, d) => this.recv(from, d);
     try { this.link = this.transport === 'ws' ? new WsLink(this.url || ('ws://' + location.host + '/ws'), this.room, on) : this.transport === 'online' ? new PeerLink(this.room, asHost, on) : new LocalLink(this.room, on); }
@@ -172,7 +172,9 @@ const Net = {
       case 'hello': if (!this.host) break; {
         const o = Menu.opts, taken = new Set(Object.values(this.peers).map((p) => p.slot)), free = o.ais.findIndex((a, i) => !taken.has(i + 1));
         this.peers[from] = { id: from, name: String(d.name || 'Player').slice(0, 20), slot: free >= 0 ? free + 1 : -1 };
-        this.status = this.peers[from].name + ' joined'; this.pushLobby(); break; }
+        this.status = this.peers[from].name + ' joined';
+        if (G.running) this.joinLate(this.peers[from]);
+        this.pushLobby(); break; }
       case 'bye': if (this.host && this.peers[from]) { const p = this.peers[from]; delete this.peers[from]; this.status = p.name + ' left'; if (G.running && p.slot > 0 && fac(p.slot)) { fac(p.slot).human = false; UI.msg(p.name + ' left — their nation is now under AI command', 'warn'); const f = fac(p.slot); f.isAI = true; AI.setup(f, 'normal'); } this.pushLobby(); } break;
       case 'lobby': if (this.client) { this.lobby = d; this.render(); } break;
       case 'chat': this.chat.push({ n: d.n, m: d.m }); if (G.running) UI.msg(d.n + ': ' + d.m, 'info'); else this.render(); break;
@@ -188,12 +190,31 @@ const Net = {
     o.humans = peers.filter((p) => p.slot > 0).map((p) => p.slot);
     Store.set('lastSetup', { ...o, seed: undefined });
     UI.closeWins();
-    Game.start(o);
-    this.sent = {}; this.acc = 0; this.slowAcc = 0; this.ev = []; this.tick = 0;
-    const save = SaveLoad.serialize(), assign = {};
-    for (const p of peers) assign[p.id] = p.slot;
-    this.send({ t: 'start', save, assign, names: Object.fromEntries(peers.map((p) => [p.slot, p.name])) });
-    UI.msg('Multiplayer battle started — ' + peers.length + ' player' + (peers.length > 1 ? 's' : '') + ' connected', 'good');
+    Game.start(o); // its 'started' event hands the battle to the room
+  },
+  resetHost() { this.sent = {}; this.acc = 0; this.ev = []; this.tick = 0; },
+  // However the host's battle begins (the start button here, Deploy on the setup screen, Load game),
+  // everyone in the room gets it. Before, only the button here sent it, so players left waiting in the lobby.
+  hostStarted() {
+    this.resetHost();
+    const peers = Object.values(this.peers); if (!peers.length) return;
+    for (const p of peers) p.slot = this.seat(p, p.slot);
+    this.handOver(peers);
+    setTimeout(() => UI.msg('Multiplayer battle started — ' + peers.length + ' player' + (peers.length > 1 ? 's' : '') + ' connected', 'good'), 0);
+  },
+  // a player arriving mid-battle takes a free AI nation, or spectates when none is left
+  joinLate(p) {
+    const taken = new Set(Object.values(this.peers).filter((q) => q !== p).map((q) => q.slot));
+    const f = G.factions.find((f) => f.id > 0 && f.alive && f.isAI && !f.noElim && !taken.has(f.id));
+    p.slot = this.seat(p, f ? f.id : -1);
+    this.handOver([p]);
+    UI.msg(p.name + ' joined the battle' + (p.slot > 0 ? ' as ' + fac(p.slot).name : ' as a spectator'), 'good');
+  },
+  seat(p, slot) { const f = slot > 0 && fac(slot); if (!f || !f.alive) return -1; f.isAI = false; f.human = true; return slot; },
+  handOver(peers) {
+    const d = { t: 'start', save: SaveLoad.serialize(), assign: {}, names: {} };
+    for (const p of peers) { d.assign[p.id] = p.slot; d.names[p.slot] = p.name; }
+    if (peers.length === Object.keys(this.peers).length) this.send(d); else for (const p of peers) this.send(d, p.id);
   },
   // serialize call arguments: entities, factions and settlements travel as ids
   enc(v) {
@@ -366,6 +387,7 @@ const Net = {
     wrapFx(Decals, 'add', (a) => Net.hostRecord(['d', Math.round(a[0]), Math.round(a[1]), Math.round(a[2]), a[3] || 'crater']));
     wrapFx(Proj, 'spawn', (a) => { const o = a[0]; Net.hostRecord(['p', o.type, Math.round(o.x), Math.round(o.y), Math.round(o.z || 0), Math.round(o.tx), Math.round(o.ty), Math.round(o.tz || 0), o.spd || 600]); });
     Bus.on('sfx', (n, x, y, k) => { if (Net.host && n) Net.hostRecord(['s', n, x == null ? null : Math.round(x), y == null ? null : Math.round(y), k]); });
+    Bus.on('started', () => { if (Net.host && Net.active) Net.hostStarted(); });
     const s = Store.get('mp', null); if (s) { this.name = s.name || this.name; this.transport = s.transport || 'online'; this.url = s.url || ''; }
     // invite links: ?join=CODE opens the multiplayer window ready to join
     const q = new URLSearchParams(location.search), code = (q.get('join') || '').toUpperCase().replace(/[^A-Z0-9-]/g, '');
