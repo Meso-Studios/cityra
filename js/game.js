@@ -115,8 +115,16 @@ const Game = {
     if (opts.mode === 'defensive') { if (f.isPlayer) { sp('mbt', 3); sp('at', 3); sp('mg', 2); } else { sp('mbt', 5); sp('rifle', 6); } }
   },
 
-  loop(ts) {
-    const now = ts / 1000, dt = Math.min(0.25, now - (this.lastT || now)); this.lastT = now;
+  loop() {
+    this.rafAt = performance.now();
+    const dt = this.tickDt();
+    this.advance(dt);
+    if (G.running) { Render.frame(); UI.frame(dt); }
+    requestAnimationFrame(() => this.loop());
+  },
+  tickDt() { const now = performance.now() / 1000, dt = Math.min(0.25, now - (this.lastT || now)); this.lastT = now; return dt; },
+  // one step of game time: effects quality, the fixed-step simulation and multiplayer traffic
+  advance(dt) {
     // adaptive effects quality: trims particle budgets when frames run long, restores when smooth
     this.ft = this.ft == null ? dt : this.ft * 0.95 + dt * 0.05;
     if (this.ft > 1 / 38) FX.quality = Math.max(0.3, FX.quality - 0.02); else if (this.ft < 1 / 55) FX.quality = Math.min(1, FX.quality + 0.005);
@@ -130,8 +138,18 @@ const Game = {
       if (n >= 8) this.acc = 0;
     }
     if (typeof Net !== 'undefined' && Net.active) Net.frame(dt);
-    if (G.running) { Render.frame(); UI.frame(dt); }
-    requestAnimationFrame((t) => this.loop(t));
+  },
+  // Browsers stop requestAnimationFrame in background or minimised tabs and slow timers to ~1/s, which
+  // froze a multiplayer host (and so every client) whenever its window wasn't in front. A worker's timer
+  // isn't throttled, so while a match is online it keeps the game ticking whenever frames stop arriving.
+  backgroundClock(on) {
+    if (on && !this.bgWorker) {
+      try {
+        const url = URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 33);'], { type: 'text/javascript' }));
+        this.bgWorker = new Worker(url); URL.revokeObjectURL(url);
+        this.bgWorker.onmessage = () => { if (G.running && performance.now() - (this.rafAt || 0) > 120) this.advance(this.tickDt()); };
+      } catch (e) { this.bgWorker = { terminate() { clearInterval(this.iv); }, iv: setInterval(() => { if (G.running && performance.now() - (this.rafAt || 0) > 120) this.advance(this.tickDt()); }, 33) }; }
+    } else if (!on && this.bgWorker) { this.bgWorker.terminate(); this.bgWorker = null; }
   },
 
   sim(dt) {

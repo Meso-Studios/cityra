@@ -140,6 +140,7 @@ const Net = {
   open(asHost) {
     this.leave(true);
     this.host = asHost; this.client = !asHost; this.active = true; this.peers = {}; this.status = 'Connecting…'; this.chat = [];
+    Game.backgroundClock(true);
     const on = (from, d) => this.recv(from, d);
     try { this.link = this.transport === 'ws' ? new WsLink(this.url || ('ws://' + location.host + '/ws'), this.room, on) : this.transport === 'online' ? new PeerLink(this.room, asHost, on) : new LocalLink(this.room, on); }
     catch (e) { this.status = 'Could not connect: ' + e.message; this.active = false; }
@@ -149,6 +150,7 @@ const Net = {
     if (this.link) { if (this.client) this.link.send({ t: 'bye' }); else if (this.host) this.link.send({ t: 'closed' }); this.link.close(); }
     const wasClient = this.client && G.running;
     this.link = null; this.active = false; this.host = false; this.client = false; this.peers = {}; this.lobby = null;
+    Game.backgroundClock(false);
     if (!quiet) { this.status = 'Left the room'; this.render(); }
     if (wasClient) { G.running = false; UI.closeWins(); $('game').hidden = true; Menu.show(); }
   },
